@@ -3,7 +3,7 @@ import base64
 import os
 import pandas as pd
 import re
-from google import genai
+from google import google-generativeai
 from google.genai import types
 import PyPDF2
 from io import BytesIO
