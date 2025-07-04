@@ -4,7 +4,6 @@ import os
 import pandas as pd
 import re
 import google.generativeai as genai
-from google.generativeai.types import Content, Part
 import PyPDF2
 from io import BytesIO
 import json
