@@ -23,7 +23,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 def get_gemini_model():
     """Initialize Gemini model"""
     try:
-        return genai.GenerativeModel('gemini-1.5-flash')
+        return genai.GenerativeModel('gemini-2.0-flash')
     except Exception as e:
         st.error(f"Error initializing Gemini model: {str(e)}")
         return None
