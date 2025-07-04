@@ -19,10 +19,17 @@ if not GEMINI_API_KEY:
     st.info("Set your environment variable: `export GEMINI_API_KEY=your_api_key_here`")
     st.stop()
 
-# Initialize Gemini client
+# Configure Gemini
+genai.configure(api_key=GEMINI_API_KEY)
+
 @st.cache_resource
-def get_gemini_client():
-    return genai.Client(api_key=GEMINI_API_KEY)
+def get_gemini_model():
+    """Initialize Gemini model"""
+    try:
+        return genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        st.error(f"Error initializing Gemini model: {str(e)}")
+        return None
 
 def image_to_base64(image):
     """Convert PIL Image to base64 string"""
@@ -43,45 +50,21 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"Error reading PDF: {str(e)}")
         return ""
 
-def generate_response(client, prompt, image=None, model="gemini-2.0-flash"):
+def generate_response(model, prompt, image=None):
     """Generate response from Gemini API with optional image"""
     try:
-        parts = [types.Part.from_text(text=prompt)]
-        
-        # Add image if provided
         if image is not None:
-            img_base64 = image_to_base64(image)
-            parts.append(
-                types.Part.from_bytes(
-                    data=base64.b64decode(img_base64),
-                    mime_type="image/png"
-                )
-            )
+            # For multimodal input (text + image)
+            response = model.generate_content([prompt, image])
+        else:
+            # For text-only input
+            response = model.generate_content(prompt)
         
-        contents = [
-            types.Content(
-                role="user",
-                parts=parts,
-            ),
-        ]
-        
-        generate_content_config = types.GenerateContentConfig(
-            response_mime_type="text/plain",
-        )
-        
-        response_text = ""
-        for chunk in client.models.generate_content_stream(
-            model=model,
-            contents=contents,
-            config=generate_content_config,
-        ):
-            response_text += chunk.text
-        
-        return response_text
+        return response.text
     except Exception as e:
         return f"Error generating response: {str(e)}"
 
-def extract_skills_from_job_description(client, job_description):
+def extract_skills_from_job_description(model, job_description):
     """Extract skills from job description using Gemini"""
     prompt = f"""
     Extract all technical skills, soft skills, and qualifications from the following job description.
@@ -91,11 +74,11 @@ def extract_skills_from_job_description(client, job_description):
     {job_description}
     """
     
-    response = generate_response(client, prompt)
+    response = generate_response(model, prompt)
     skills = [skill.strip() for skill in response.split(',') if skill.strip()]
     return skills
 
-def analyze_resume(client, resume_text, job_description, required_skills):
+def analyze_resume(model, resume_text, job_description, required_skills):
     """Analyze resume against job description and extract information"""
     prompt = f"""
     Analyze the following resume against the job description and required skills.
@@ -120,7 +103,7 @@ def analyze_resume(client, resume_text, job_description, required_skills):
     Return only the JSON without any additional text or formatting.
     """
     
-    response = generate_response(client, prompt)
+    response = generate_response(model, prompt)
     try:
         # Clean the response to extract JSON
         json_start = response.find('{')
@@ -149,6 +132,12 @@ def apply_chat_styles():
     footer {visibility: hidden;}
     .stDecoration {display:none;}
     
+    /* Main container */
+    .main .block-container {
+        padding-top: 2rem;
+        padding-bottom: 10rem;
+    }
+    
     /* Chat container styling */
     .chat-container {
         height: 60vh;
@@ -158,6 +147,7 @@ def apply_chat_styles():
         border-radius: 10px;
         background-color: #fafafa;
         margin-bottom: 1rem;
+        scroll-behavior: smooth;
     }
     
     /* Message styling */
@@ -168,7 +158,8 @@ def apply_chat_styles():
         border-radius: 18px;
         margin: 0.5rem 0;
         margin-left: 20%;
-        text-align: right;
+        text-align: left;
+        word-wrap: break-word;
     }
     
     .assistant-message {
@@ -178,6 +169,7 @@ def apply_chat_styles():
         border-radius: 18px;
         margin: 0.5rem 0;
         margin-right: 20%;
+        word-wrap: break-word;
     }
     
     .message-timestamp {
@@ -196,11 +188,7 @@ def apply_chat_styles():
         padding: 1rem;
         border-top: 1px solid #e0e0e0;
         z-index: 999;
-    }
-    
-    /* Adjust main content to account for fixed input */
-    .main-content {
-        padding-bottom: 120px;
+        box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
     }
     
     /* Image preview styling */
@@ -228,6 +216,7 @@ def apply_chat_styles():
         border: none;
         padding: 0.5rem 1.5rem;
         font-weight: 500;
+        transition: background-color 0.3s;
     }
     
     .stButton > button:hover {
@@ -251,10 +240,22 @@ def apply_chat_styles():
         background-color: #007bff;
         color: white;
     }
+    
+    /* Text input styling */
+    .stTextInput > div > div > input {
+        border-radius: 20px;
+        border: 2px solid #e0e0e0;
+        padding: 0.75rem 1rem;
+    }
+    
+    .stTextInput > div > div > input:focus {
+        border-color: #007bff;
+        box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+    }
     </style>
     """, unsafe_allow_html=True)
 
-def display_chat_message(message_type, content, timestamp, image=None):
+def display_chat_message(message_type, content, timestamp, image_b64=None):
     """Display a chat message with proper styling"""
     if message_type == "user":
         message_class = "user-message"
@@ -263,11 +264,16 @@ def display_chat_message(message_type, content, timestamp, image=None):
         message_class = "assistant-message"
         prefix = "AI Assistant"
     
+    # Handle image display
+    image_html = ""
+    if image_b64:
+        image_html = f'<br><img src="data:image/png;base64,{image_b64}" class="image-preview">'
+    
     message_html = f"""
     <div class="{message_class}">
         <strong>{prefix}:</strong><br>
         {content.replace('\n', '<br>')}
-        {f'<br><img src="data:image/png;base64,{image}" class="image-preview">' if image else ''}
+        {image_html}
         <div class="message-timestamp">{timestamp}</div>
     </div>
     """
@@ -286,6 +292,12 @@ def main():
     
     st.title("🤖 AI Assistant & Resume Analyzer")
     
+    # Initialize Gemini model
+    model = get_gemini_model()
+    if not model:
+        st.error("Failed to initialize Gemini model. Please check your API key and try again.")
+        st.stop()
+    
     # Initialize session state
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
@@ -293,16 +305,13 @@ def main():
         st.session_state.uploaded_image = None
     if 'image_preview' not in st.session_state:
         st.session_state.image_preview = None
+    if 'user_input' not in st.session_state:
+        st.session_state.user_input = ""
     
     # Create tabs
     tab1, tab2 = st.tabs(["💬 Chatbot", "📄 Resume Analyzer"])
     
-    # Initialize Gemini client
-    client = get_gemini_client()
-    
     with tab1:
-        st.markdown('<div class="main-content">', unsafe_allow_html=True)
-        
         st.header("💬 AI Chatbot")
         st.write("Chat with AI assistant - Upload images and ask questions!")
         
@@ -310,7 +319,7 @@ def main():
         chat_container = st.container()
         
         with chat_container:
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+            st.markdown('<div class="chat-container" id="chat-container">', unsafe_allow_html=True)
             
             # Display chat history
             for i, chat_item in enumerate(st.session_state.chat_history):
@@ -325,53 +334,60 @@ def main():
             
             st.markdown('</div>', unsafe_allow_html=True)
         
+        # Spacer to push input to bottom
+        st.markdown("<div style='height: 150px;'></div>", unsafe_allow_html=True)
+        
         # Fixed input area
-        st.markdown('<div class="input-container">', unsafe_allow_html=True)
-        
-        # Image upload section
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            uploaded_image = st.file_uploader(
-                "Upload an image (optional)",
-                type=['png', 'jpg', 'jpeg', 'gif', 'bmp'],
-                key="chat_image_uploader",
-                help="Upload an image to analyze along with your text prompt"
-            )
-        
-        with col2:
-            if uploaded_image:
-                image = Image.open(uploaded_image)
-                st.image(image, caption="Uploaded Image", width=100)
-                st.session_state.uploaded_image = image
-                st.session_state.image_preview = image_to_base64(image)
-            elif st.session_state.uploaded_image:
-                st.image(st.session_state.uploaded_image, caption="Current Image", width=100)
-        
-        # Clear image button
-        if st.session_state.uploaded_image:
-            if st.button("🗑️ Remove Image"):
-                st.session_state.uploaded_image = None
-                st.session_state.image_preview = None
-                st.rerun()
-        
-        # Chat input
-        user_input = st.text_input(
-            "Type your message here...",
-            key="chat_input",
-            placeholder="Ask me anything or upload an image for analysis..."
-        )
-        
-        # Send button
-        col1, col2, col3 = st.columns([1, 1, 1])
-        with col2:
-            send_button = st.button("📤 Send Message", key="send_btn", use_container_width=True)
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        input_container = st.container()
+        with input_container:
+            st.markdown('<div class="input-container">', unsafe_allow_html=True)
+            
+            # Image upload section
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                uploaded_image = st.file_uploader(
+                    "Upload an image (optional)",
+                    type=['png', 'jpg', 'jpeg', 'gif', 'bmp'],
+                    key="chat_image_uploader",
+                    help="Upload an image to analyze along with your text prompt"
+                )
+            
+            with col2:
+                if uploaded_image:
+                    image = Image.open(uploaded_image)
+                    st.image(image, caption="Uploaded Image", width=100)
+                    st.session_state.uploaded_image = image
+                    st.session_state.image_preview = image_to_base64(image)
+                elif st.session_state.uploaded_image:
+                    st.image(st.session_state.uploaded_image, caption="Current Image", width=100)
+            
+            # Clear image button
+            if st.session_state.uploaded_image:
+                if st.button("🗑️ Remove Image", key="remove_img"):
+                    st.session_state.uploaded_image = None
+                    st.session_state.image_preview = None
+                    st.rerun()
+            
+            # Chat input
+            col1, col2 = st.columns([4, 1])
+            
+            with col1:
+                user_input = st.text_input(
+                    "Message",
+                    key="chat_input",
+                    placeholder="Ask me anything or upload an image for analysis...",
+                    label_visibility="collapsed"
+                )
+            
+            with col2:
+                send_button = st.button("📤 Send", key="send_btn", use_container_width=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
         
         # Process message
-        if (send_button or user_input) and user_input.strip():
+        if (send_button and user_input.strip()) or (user_input.strip() and user_input != st.session_state.user_input):
+            st.session_state.user_input = user_input
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             # Generate AI response
@@ -389,7 +405,7 @@ def main():
                 
                 # Generate response with or without image
                 ai_response = generate_response(
-                    client, 
+                    model, 
                     full_prompt, 
                     image=st.session_state.uploaded_image
                 )
@@ -408,7 +424,8 @@ def main():
             else:
                 st.session_state.chat_history.append((user_input, ai_response, timestamp))
             
-            # Clear input and rerun
+            # Clear input
+            st.session_state.user_input = ""
             st.rerun()
         
         # Clear chat button (at the top)
@@ -416,6 +433,7 @@ def main():
             st.session_state.chat_history = []
             st.session_state.uploaded_image = None
             st.session_state.image_preview = None
+            st.session_state.user_input = ""
             st.rerun()
     
     with tab2:
@@ -435,7 +453,8 @@ def main():
         uploaded_files = st.file_uploader(
             "Upload PDF resumes (multiple files allowed)",
             type=['pdf'],
-            accept_multiple_files=True
+            accept_multiple_files=True,
+            key="resume_uploader"
         )
         
         if st.button("🔍 Analyze Resumes", type="primary"):
@@ -445,122 +464,134 @@ def main():
                 st.error("Please upload at least one resume!")
             else:
                 with st.spinner("Analyzing resumes... This may take a few minutes."):
-                    # Extract skills from job description
-                    st.info("Extracting skills from job description...")
-                    required_skills = extract_skills_from_job_description(client, job_description)
-                    
-                    st.success(f"Found {len(required_skills)} required skills:")
-                    st.write(", ".join(required_skills))
-                    
-                    # Analyze each resume
-                    results = []
-                    progress_bar = st.progress(0)
-                    
-                    for i, uploaded_file in enumerate(uploaded_files):
-                        st.info(f"Analyzing resume {i+1}/{len(uploaded_files)}: {uploaded_file.name}")
+                    try:
+                        # Extract skills from job description
+                        st.info("Extracting skills from job description...")
+                        required_skills = extract_skills_from_job_description(model, job_description)
                         
-                        # Extract text from PDF
-                        resume_text = extract_text_from_pdf(uploaded_file)
-                        
-                        if resume_text.strip():
-                            # Analyze resume
-                            analysis = analyze_resume(client, resume_text, job_description, required_skills)
-                            analysis['file_name'] = uploaded_file.name
-                            results.append(analysis)
+                        if required_skills:
+                            st.success(f"Found {len(required_skills)} required skills:")
+                            st.write(", ".join(required_skills))
                         else:
-                            st.warning(f"Could not extract text from {uploaded_file.name}")
+                            st.warning("Could not extract skills from job description. Using default analysis.")
+                            required_skills = ["Communication", "Problem Solving", "Technical Skills"]
                         
-                        progress_bar.progress((i + 1) / len(uploaded_files))
-                    
-                    if results:
-                        # Sort by overall match percentage
-                        results.sort(key=lambda x: float(x.get('overall_match_percentage', 0)), reverse=True)
+                        # Analyze each resume
+                        results = []
+                        progress_bar = st.progress(0)
                         
-                        st.success("Analysis completed!")
-                        
-                        # Display results
-                        st.subheader("📊 Analysis Results")
-                        
-                        # Create summary table
-                        summary_data = []
-                        for result in results:
-                            row = {
-                                'Rank': len(summary_data) + 1,
-                                'Candidate Name': result.get('candidate_name', 'Unknown'),
-                                'File Name': result.get('file_name', ''),
-                                'Experience (Years)': result.get('experience_years', '0'),
-                                'Overall Match (%)': result.get('overall_match_percentage', '0'),
-                                'Summary': result.get('summary', '')
-                            }
-                            summary_data.append(row)
-                        
-                        summary_df = pd.DataFrame(summary_data)
-                        st.dataframe(summary_df, use_container_width=True)
-                        
-                        # Skills matrix
-                        st.subheader("🎯 Skills Matrix")
-                        
-                        skills_data = []
-                        for result in results:
-                            row = {
-                                'Candidate': result.get('candidate_name', 'Unknown'),
-                                'Experience': result.get('experience_years', '0'),
-                                'Match %': result.get('overall_match_percentage', '0')
-                            }
+                        for i, uploaded_file in enumerate(uploaded_files):
+                            st.info(f"Analyzing resume {i+1}/{len(uploaded_files)}: {uploaded_file.name}")
                             
-                            # Add skills columns
-                            skills_match = result.get('skills_match', {})
-                            for skill in required_skills:
-                                row[skill] = "✅" if skills_match.get(skill, False) else "❌"
+                            # Reset file pointer
+                            uploaded_file.seek(0)
                             
-                            skills_data.append(row)
+                            # Extract text from PDF
+                            resume_text = extract_text_from_pdf(uploaded_file)
+                            
+                            if resume_text.strip():
+                                # Analyze resume
+                                analysis = analyze_resume(model, resume_text, job_description, required_skills)
+                                analysis['file_name'] = uploaded_file.name
+                                results.append(analysis)
+                            else:
+                                st.warning(f"Could not extract text from {uploaded_file.name}")
+                            
+                            progress_bar.progress((i + 1) / len(uploaded_files))
                         
-                        skills_df = pd.DataFrame(skills_data)
-                        st.dataframe(skills_df, use_container_width=True)
-                        
-                        # Top candidates
-                        st.subheader("🏆 Top Matching Candidates")
-                        
-                        for i, result in enumerate(results[:3]):  # Top 3 candidates
-                            with st.expander(f"#{i+1} - {result.get('candidate_name', 'Unknown')} ({result.get('overall_match_percentage', '0')}% match)"):
-                                col1, col2 = st.columns(2)
+                        if results:
+                            # Sort by overall match percentage
+                            results.sort(key=lambda x: float(str(x.get('overall_match_percentage', 0)).replace('%', '')), reverse=True)
+                            
+                            st.success("Analysis completed!")
+                            
+                            # Display results
+                            st.subheader("📊 Analysis Results")
+                            
+                            # Create summary table
+                            summary_data = []
+                            for result in results:
+                                row = {
+                                    'Rank': len(summary_data) + 1,
+                                    'Candidate Name': result.get('candidate_name', 'Unknown'),
+                                    'File Name': result.get('file_name', ''),
+                                    'Experience (Years)': result.get('experience_years', '0'),
+                                    'Overall Match (%)': result.get('overall_match_percentage', '0'),
+                                    'Summary': result.get('summary', '')
+                                }
+                                summary_data.append(row)
+                            
+                            summary_df = pd.DataFrame(summary_data)
+                            st.dataframe(summary_df, use_container_width=True)
+                            
+                            # Skills matrix
+                            st.subheader("🎯 Skills Matrix")
+                            
+                            skills_data = []
+                            for result in results:
+                                row = {
+                                    'Candidate': result.get('candidate_name', 'Unknown'),
+                                    'Experience': result.get('experience_years', '0'),
+                                    'Match %': result.get('overall_match_percentage', '0')
+                                }
                                 
-                                with col1:
-                                    st.write(f"**File:** {result.get('file_name', '')}")
-                                    st.write(f"**Experience:** {result.get('experience_years', '0')} years")
-                                    st.write(f"**Match Percentage:** {result.get('overall_match_percentage', '0')}%")
+                                # Add skills columns
+                                skills_match = result.get('skills_match', {})
+                                for skill in required_skills:
+                                    row[skill] = "✅" if skills_match.get(skill, False) else "❌"
                                 
-                                with col2:
-                                    st.write("**Skills Match:**")
-                                    skills_match = result.get('skills_match', {})
-                                    matched_skills = [skill for skill, match in skills_match.items() if match]
-                                    missing_skills = [skill for skill, match in skills_match.items() if not match]
+                                skills_data.append(row)
+                            
+                            skills_df = pd.DataFrame(skills_data)
+                            st.dataframe(skills_df, use_container_width=True)
+                            
+                            # Top candidates
+                            st.subheader("🏆 Top Matching Candidates")
+                            
+                            for i, result in enumerate(results[:3]):  # Top 3 candidates
+                                with st.expander(f"#{i+1} - {result.get('candidate_name', 'Unknown')} ({result.get('overall_match_percentage', '0')}% match)"):
+                                    col1, col2 = st.columns(2)
                                     
-                                    if matched_skills:
-                                        st.success(f"✅ Has: {', '.join(matched_skills)}")
-                                    if missing_skills:
-                                        st.error(f"❌ Missing: {', '.join(missing_skills)}")
-                                
-                                st.write(f"**Summary:** {result.get('summary', '')}")
+                                    with col1:
+                                        st.write(f"**File:** {result.get('file_name', '')}")
+                                        st.write(f"**Experience:** {result.get('experience_years', '0')} years")
+                                        st.write(f"**Match Percentage:** {result.get('overall_match_percentage', '0')}%")
+                                    
+                                    with col2:
+                                        st.write("**Skills Match:**")
+                                        skills_match = result.get('skills_match', {})
+                                        matched_skills = [skill for skill, match in skills_match.items() if match]
+                                        missing_skills = [skill for skill, match in skills_match.items() if not match]
+                                        
+                                        if matched_skills:
+                                            st.success(f"✅ Has: {', '.join(matched_skills)}")
+                                        if missing_skills:
+                                            st.error(f"❌ Missing: {', '.join(missing_skills)}")
+                                    
+                                    st.write(f"**Summary:** {result.get('summary', '')}")
+                            
+                            # Download results
+                            st.subheader("📥 Download Results")
+                            
+                            # Create Excel file
+                            output = BytesIO()
+                            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                                summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                                skills_df.to_excel(writer, sheet_name='Skills Matrix', index=False)
+                            
+                            st.download_button(
+                                label="📊 Download Analysis Report (Excel)",
+                                data=output.getvalue(),
+                                file_name=f"resume_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
                         
-                        # Download results
-                        st.subheader("📥 Download Results")
-                        
-                        # Create Excel file
-                        output = BytesIO()
-                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                            summary_df.to_excel(writer, sheet_name='Summary', index=False)
-                            skills_df.to_excel(writer, sheet_name='Skills Matrix', index=False)
-                        
-                        st.download_button(
-                            label="📊 Download Analysis Report (Excel)",
-                            data=output.getvalue(),
-                            file_name=f"resume_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
+                        else:
+                            st.error("No resumes could be analyzed. Please check your PDF files.")
                     
-                    else:
-                        st.error("No resumes could be analyzed. Please check your PDF files.")
+                    except Exception as e:
+                        st.error(f"An error occurred during analysis: {str(e)}")
+                        st.info("Please try again or check your API key and internet connection.")
 
 if __name__ == "__main__":
     main()
