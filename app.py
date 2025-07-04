@@ -9,14 +9,28 @@ import PyPDF2
 from io import BytesIO
 import json
 from datetime import datetime
+from PIL import Image
+import io
 
-# Set your API key here
-GEMINI_API_KEY = "AIzaSyCup89v2NbecBFc1oVYLFBoPhfpvCzrVGk"  # Replace with your actual API key
+# Get API key from environment variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    st.error("⚠️ GEMINI_API_KEY environment variable not found! Please set your API key.")
+    st.info("Set your environment variable: `export GEMINI_API_KEY=your_api_key_here`")
+    st.stop()
 
 # Initialize Gemini client
 @st.cache_resource
 def get_gemini_client():
     return genai.Client(api_key=GEMINI_API_KEY)
+
+def image_to_base64(image):
+    """Convert PIL Image to base64 string"""
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return img_str
 
 def extract_text_from_pdf(pdf_file):
     """Extract text from uploaded PDF file"""
@@ -30,15 +44,25 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"Error reading PDF: {str(e)}")
         return ""
 
-def generate_response(client, prompt, model="gemini-2.0-flash"):
-    """Generate response from Gemini API"""
+def generate_response(client, prompt, image=None, model="gemini-2.0-flash"):
+    """Generate response from Gemini API with optional image"""
     try:
+        parts = [types.Part.from_text(text=prompt)]
+        
+        # Add image if provided
+        if image is not None:
+            img_base64 = image_to_base64(image)
+            parts.append(
+                types.Part.from_bytes(
+                    data=base64.b64decode(img_base64),
+                    mime_type="image/png"
+                )
+            )
+        
         contents = [
             types.Content(
                 role="user",
-                parts=[
-                    types.Part.from_text(text=prompt),
-                ],
+                parts=parts,
             ),
         ]
         
@@ -117,18 +141,159 @@ def analyze_resume(client, resume_text, job_description, required_skills):
         "summary": "Analysis failed"
     }
 
+def apply_chat_styles():
+    """Apply custom CSS for ChatGPT-like interface"""
+    st.markdown("""
+    <style>
+    /* Hide default Streamlit elements */
+    .stDeployButton {display:none;}
+    footer {visibility: hidden;}
+    .stDecoration {display:none;}
+    
+    /* Chat container styling */
+    .chat-container {
+        height: 60vh;
+        overflow-y: auto;
+        padding: 1rem;
+        border: 1px solid #e0e0e0;
+        border-radius: 10px;
+        background-color: #fafafa;
+        margin-bottom: 1rem;
+    }
+    
+    /* Message styling */
+    .user-message {
+        background-color: #007bff;
+        color: white;
+        padding: 0.75rem 1rem;
+        border-radius: 18px;
+        margin: 0.5rem 0;
+        margin-left: 20%;
+        text-align: right;
+    }
+    
+    .assistant-message {
+        background-color: #f1f3f4;
+        color: #333;
+        padding: 0.75rem 1rem;
+        border-radius: 18px;
+        margin: 0.5rem 0;
+        margin-right: 20%;
+    }
+    
+    .message-timestamp {
+        font-size: 0.7rem;
+        opacity: 0.7;
+        margin-top: 0.25rem;
+    }
+    
+    /* Input area styling */
+    .input-container {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background-color: white;
+        padding: 1rem;
+        border-top: 1px solid #e0e0e0;
+        z-index: 999;
+    }
+    
+    /* Adjust main content to account for fixed input */
+    .main-content {
+        padding-bottom: 120px;
+    }
+    
+    /* Image preview styling */
+    .image-preview {
+        max-width: 200px;
+        max-height: 200px;
+        border-radius: 10px;
+        margin: 0.5rem 0;
+    }
+    
+    /* File uploader styling */
+    .stFileUploader > div > div > div > div {
+        background-color: #f8f9fa;
+        border: 2px dashed #dee2e6;
+        border-radius: 10px;
+        padding: 1rem;
+        text-align: center;
+    }
+    
+    /* Button styling */
+    .stButton > button {
+        background-color: #007bff;
+        color: white;
+        border-radius: 20px;
+        border: none;
+        padding: 0.5rem 1.5rem;
+        font-weight: 500;
+    }
+    
+    .stButton > button:hover {
+        background-color: #0056b3;
+    }
+    
+    /* Tab styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 2rem;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        padding: 0 1.5rem;
+        background-color: #f8f9fa;
+        border-radius: 10px 10px 0 0;
+        font-weight: 500;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #007bff;
+        color: white;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+def display_chat_message(message_type, content, timestamp, image=None):
+    """Display a chat message with proper styling"""
+    if message_type == "user":
+        message_class = "user-message"
+        prefix = "You"
+    else:
+        message_class = "assistant-message"
+        prefix = "AI Assistant"
+    
+    message_html = f"""
+    <div class="{message_class}">
+        <strong>{prefix}:</strong><br>
+        {content.replace('\n', '<br>')}
+        {f'<br><img src="data:image/png;base64,{image}" class="image-preview">' if image else ''}
+        <div class="message-timestamp">{timestamp}</div>
+    </div>
+    """
+    st.markdown(message_html, unsafe_allow_html=True)
+
 def main():
     st.set_page_config(
         page_title="AI Assistant & Resume Analyzer",
         page_icon="🤖",
-        layout="wide"
+        layout="wide",
+        initial_sidebar_state="collapsed"
     )
+    
+    # Apply custom styles
+    apply_chat_styles()
     
     st.title("🤖 AI Assistant & Resume Analyzer")
     
     # Initialize session state
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
+    if 'uploaded_image' not in st.session_state:
+        st.session_state.uploaded_image = None
+    if 'image_preview' not in st.session_state:
+        st.session_state.image_preview = None
     
     # Create tabs
     tab1, tab2 = st.tabs(["💬 Chatbot", "📄 Resume Analyzer"])
@@ -137,50 +302,121 @@ def main():
     client = get_gemini_client()
     
     with tab1:
-        st.header("💬 AI Chatbot")
-        st.write("Chat with AI assistant - Your conversation history is maintained!")
+        st.markdown('<div class="main-content">', unsafe_allow_html=True)
         
-        # Chat interface
+        st.header("💬 AI Chatbot")
+        st.write("Chat with AI assistant - Upload images and ask questions!")
+        
+        # Chat history container
         chat_container = st.container()
         
-        # Display chat history
         with chat_container:
-            for i, (user_msg, bot_msg, timestamp) in enumerate(st.session_state.chat_history):
-                with st.chat_message("user"):
-                    st.write(f"**You:** {user_msg}")
-                    st.caption(timestamp)
+            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+            
+            # Display chat history
+            for i, chat_item in enumerate(st.session_state.chat_history):
+                if len(chat_item) == 4:  # With image
+                    user_msg, bot_msg, timestamp, image_b64 = chat_item
+                    display_chat_message("user", user_msg, timestamp, image_b64)
+                else:  # Without image
+                    user_msg, bot_msg, timestamp = chat_item
+                    display_chat_message("user", user_msg, timestamp)
                 
-                with st.chat_message("assistant"):
-                    st.write(f"**AI:** {bot_msg}")
+                display_chat_message("assistant", bot_msg, timestamp)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Fixed input area
+        st.markdown('<div class="input-container">', unsafe_allow_html=True)
+        
+        # Image upload section
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            uploaded_image = st.file_uploader(
+                "Upload an image (optional)",
+                type=['png', 'jpg', 'jpeg', 'gif', 'bmp'],
+                key="chat_image_uploader",
+                help="Upload an image to analyze along with your text prompt"
+            )
+        
+        with col2:
+            if uploaded_image:
+                image = Image.open(uploaded_image)
+                st.image(image, caption="Uploaded Image", width=100)
+                st.session_state.uploaded_image = image
+                st.session_state.image_preview = image_to_base64(image)
+            elif st.session_state.uploaded_image:
+                st.image(st.session_state.uploaded_image, caption="Current Image", width=100)
+        
+        # Clear image button
+        if st.session_state.uploaded_image:
+            if st.button("🗑️ Remove Image"):
+                st.session_state.uploaded_image = None
+                st.session_state.image_preview = None
+                st.rerun()
         
         # Chat input
-        user_input = st.chat_input("Type your message here...")
+        user_input = st.text_input(
+            "Type your message here...",
+            key="chat_input",
+            placeholder="Ask me anything or upload an image for analysis..."
+        )
         
-        if user_input:
-            # Add user message to history
+        # Send button
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            send_button = st.button("📤 Send Message", key="send_btn", use_container_width=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Process message
+        if (send_button or user_input) and user_input.strip():
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             # Generate AI response
-            with st.spinner("AI is thinking..."):
+            with st.spinner("🤔 AI is thinking..."):
                 # Include chat history for context
                 context = ""
                 if st.session_state.chat_history:
-                    context = "Previous conversation:\n"
-                    for user_msg, bot_msg, _ in st.session_state.chat_history[-5:]:  # Last 5 exchanges
-                        context += f"User: {user_msg}\nAI: {bot_msg}\n\n"
+                    context = "Previous conversation context:\n"
+                    for chat_item in st.session_state.chat_history[-3:]:  # Last 3 exchanges
+                        if len(chat_item) >= 3:
+                            user_msg, bot_msg = chat_item[0], chat_item[1]
+                            context += f"User: {user_msg}\nAI: {bot_msg}\n\n"
                 
-                full_prompt = f"{context}Current question: {user_input}"
-                ai_response = generate_response(client, full_prompt)
+                full_prompt = f"{context}Current message: {user_input}"
+                
+                # Generate response with or without image
+                ai_response = generate_response(
+                    client, 
+                    full_prompt, 
+                    image=st.session_state.uploaded_image
+                )
             
             # Add to chat history
-            st.session_state.chat_history.append((user_input, ai_response, timestamp))
+            if st.session_state.uploaded_image:
+                st.session_state.chat_history.append((
+                    user_input, 
+                    ai_response, 
+                    timestamp, 
+                    st.session_state.image_preview
+                ))
+                # Clear the uploaded image after sending
+                st.session_state.uploaded_image = None
+                st.session_state.image_preview = None
+            else:
+                st.session_state.chat_history.append((user_input, ai_response, timestamp))
             
-            # Rerun to update the display
+            # Clear input and rerun
             st.rerun()
         
-        # Clear chat button
-        if st.button("🗑️ Clear Chat History"):
+        # Clear chat button (at the top)
+        if st.button("🗑️ Clear Chat History", key="clear_chat"):
             st.session_state.chat_history = []
+            st.session_state.uploaded_image = None
+            st.session_state.image_preview = None
             st.rerun()
     
     with tab2:
