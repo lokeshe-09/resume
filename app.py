@@ -1,5 +1,4 @@
 import streamlit as st
-import base64
 import os
 import pandas as pd
 import re
@@ -8,8 +7,6 @@ import PyPDF2
 from io import BytesIO
 import json
 from datetime import datetime
-from PIL import Image
-import io
 
 # Get API key from environment variables
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -31,13 +28,6 @@ def get_gemini_model():
         st.error(f"Error initializing Gemini model: {str(e)}")
         return None
 
-def image_to_base64(image):
-    """Convert PIL Image to base64 string"""
-    buffered = BytesIO()
-    image.save(buffered, format="PNG")
-    img_str = base64.b64encode(buffered.getvalue()).decode()
-    return img_str
-
 def extract_text_from_pdf(pdf_file):
     """Extract text from uploaded PDF file"""
     try:
@@ -50,16 +40,10 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"Error reading PDF: {str(e)}")
         return ""
 
-def generate_response(model, prompt, image=None):
-    """Generate response from Gemini API with optional image"""
+def generate_response(model, prompt):
+    """Generate response from Gemini API"""
     try:
-        if image is not None:
-            # For multimodal input (text + image)
-            response = model.generate_content([prompt, image])
-        else:
-            # For text-only input
-            response = model.generate_content(prompt)
-        
+        response = model.generate_content(prompt)
         return response.text
     except Exception as e:
         return f"Error generating response: {str(e)}"
@@ -94,12 +78,14 @@ def analyze_resume(model, resume_text, job_description, required_skills):
         "candidate_name": "Name of the candidate",
         "experience_years": "Number of years of experience (just the number)",
         "skills_match": {{
-            "skill_name": true/false for each required skill
+            "{required_skills[0] if required_skills else 'skill1'}": true,
+            "{required_skills[1] if len(required_skills) > 1 else 'skill2'}": false
         }},
-        "overall_match_percentage": "Percentage match (just the number)",
+        "overall_match_percentage": "Percentage match (just the number without % symbol)",
         "summary": "Brief summary of the candidate's profile"
     }}
     
+    For skills_match, include all required skills and mark each as true or false based on whether the candidate has that skill.
     Return only the JSON without any additional text or formatting.
     """
     
@@ -110,9 +96,19 @@ def analyze_resume(model, resume_text, job_description, required_skills):
         json_end = response.rfind('}') + 1
         if json_start != -1 and json_end != -1:
             json_str = response[json_start:json_end]
-            return json.loads(json_str)
-    except:
-        pass
+            parsed_json = json.loads(json_str)
+            
+            # Ensure all required skills are in skills_match
+            if 'skills_match' not in parsed_json:
+                parsed_json['skills_match'] = {}
+            
+            for skill in required_skills:
+                if skill not in parsed_json['skills_match']:
+                    parsed_json['skills_match'][skill] = False
+            
+            return parsed_json
+    except Exception as e:
+        st.warning(f"JSON parsing failed for a resume: {str(e)}")
     
     # Fallback if JSON parsing fails
     return {
@@ -120,11 +116,11 @@ def analyze_resume(model, resume_text, job_description, required_skills):
         "experience_years": "0",
         "skills_match": {skill: False for skill in required_skills},
         "overall_match_percentage": "0",
-        "summary": "Analysis failed"
+        "summary": "Analysis failed - could not parse resume properly"
     }
 
-def apply_chat_styles():
-    """Apply custom CSS for ChatGPT-like interface"""
+def apply_custom_styles():
+    """Apply custom CSS for professional look"""
     st.markdown("""
     <style>
     /* Hide default Streamlit elements */
@@ -132,79 +128,38 @@ def apply_chat_styles():
     footer {visibility: hidden;}
     .stDecoration {display:none;}
     
-    /* Main container */
+    /* Main container styling */
     .main .block-container {
         padding-top: 2rem;
-        padding-bottom: 10rem;
+        padding-bottom: 2rem;
+        max-width: 1200px;
     }
     
-    /* Chat container styling */
-    .chat-container {
-        height: 60vh;
-        overflow-y: auto;
-        padding: 1rem;
-        border: 1px solid #e0e0e0;
-        border-radius: 10px;
-        background-color: #fafafa;
-        margin-bottom: 1rem;
-        scroll-behavior: smooth;
-    }
-    
-    /* Message styling */
-    .user-message {
-        background-color: #007bff;
+    /* Header styling */
+    .main-header {
+        text-align: center;
+        padding: 2rem 0;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         color: white;
-        padding: 0.75rem 1rem;
-        border-radius: 18px;
-        margin: 0.5rem 0;
-        margin-left: 20%;
-        text-align: left;
-        word-wrap: break-word;
-    }
-    
-    .assistant-message {
-        background-color: #f1f3f4;
-        color: #333;
-        padding: 0.75rem 1rem;
-        border-radius: 18px;
-        margin: 0.5rem 0;
-        margin-right: 20%;
-        word-wrap: break-word;
-    }
-    
-    .message-timestamp {
-        font-size: 0.7rem;
-        opacity: 0.7;
-        margin-top: 0.25rem;
-    }
-    
-    /* Input area styling */
-    .input-container {
-        position: fixed;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background-color: white;
-        padding: 1rem;
-        border-top: 1px solid #e0e0e0;
-        z-index: 999;
-        box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
-    }
-    
-    /* Image preview styling */
-    .image-preview {
-        max-width: 200px;
-        max-height: 200px;
         border-radius: 10px;
-        margin: 0.5rem 0;
+        margin-bottom: 2rem;
+    }
+    
+    /* Section styling */
+    .section-header {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 10px;
+        border-left: 4px solid #007bff;
+        margin: 1rem 0;
     }
     
     /* File uploader styling */
     .stFileUploader > div > div > div > div {
         background-color: #f8f9fa;
-        border: 2px dashed #dee2e6;
+        border: 2px dashed #007bff;
         border-radius: 10px;
-        padding: 1rem;
+        padding: 2rem;
         text-align: center;
     }
     
@@ -212,85 +167,124 @@ def apply_chat_styles():
     .stButton > button {
         background-color: #007bff;
         color: white;
-        border-radius: 20px;
+        border-radius: 10px;
         border: none;
-        padding: 0.5rem 1.5rem;
-        font-weight: 500;
-        transition: background-color 0.3s;
+        padding: 0.75rem 2rem;
+        font-weight: 600;
+        font-size: 1.1rem;
+        transition: all 0.3s;
+        width: 100%;
     }
     
     .stButton > button:hover {
         background-color: #0056b3;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
     
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        padding: 0 1.5rem;
-        background-color: #f8f9fa;
-        border-radius: 10px 10px 0 0;
-        font-weight: 500;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        background-color: #007bff;
-        color: white;
-    }
-    
-    /* Text input styling */
-    .stTextInput > div > div > input {
-        border-radius: 20px;
+    /* Text area styling */
+    .stTextArea > div > div > textarea {
+        border-radius: 10px;
         border: 2px solid #e0e0e0;
-        padding: 0.75rem 1rem;
+        font-family: 'Arial', sans-serif;
     }
     
-    .stTextInput > div > div > input:focus {
+    .stTextArea > div > div > textarea:focus {
         border-color: #007bff;
         box-shadow: 0 0 0 0.2rem rgba(0,123,255,.25);
+    }
+    
+    /* DataFrame styling */
+    .dataframe {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    /* Success/Error message styling */
+    .stSuccess, .stError, .stWarning, .stInfo {
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    
+    /* Progress bar styling */
+    .stProgress > div > div > div > div {
+        background-color: #007bff;
+        border-radius: 10px;
+    }
+    
+    /* Expander styling */
+    .streamlit-expanderHeader {
+        background-color: #f8f9fa;
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
+    }
+    
+    /* Metric styling */
+    .metric-container {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 10px;
+        text-align: center;
+        border: 1px solid #e0e0e0;
     }
     </style>
     """, unsafe_allow_html=True)
 
-def display_chat_message(message_type, content, timestamp, image_b64=None):
-    """Display a chat message with proper styling"""
-    if message_type == "user":
-        message_class = "user-message"
-        prefix = "You"
-    else:
-        message_class = "assistant-message"
-        prefix = "AI Assistant"
+def display_metrics(results):
+    """Display key metrics about the analysis"""
+    if not results:
+        return
     
-    # Handle image display
-    image_html = ""
-    if image_b64:
-        image_html = f'<br><img src="data:image/png;base64,{image_b64}" class="image-preview">'
+    total_candidates = len(results)
+    avg_match = sum(float(str(r.get('overall_match_percentage', 0)).replace('%', '')) for r in results) / total_candidates
+    top_match = max(float(str(r.get('overall_match_percentage', 0)).replace('%', '')) for r in results)
     
-    message_html = f"""
-    <div class="{message_class}">
-        <strong>{prefix}:</strong><br>
-        {content.replace('\n', '<br>')}
-        {image_html}
-        <div class="message-timestamp">{timestamp}</div>
-    </div>
-    """
-    st.markdown(message_html, unsafe_allow_html=True)
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-container">
+            <h3 style="color: #007bff; margin: 0;">📊 Total Candidates</h3>
+            <h2 style="margin: 0.5rem 0;">{total_candidates}</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="metric-container">
+            <h3 style="color: #28a745; margin: 0;">📈 Average Match</h3>
+            <h2 style="margin: 0.5rem 0;">{avg_match:.1f}%</h2>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="metric-container">
+            <h3 style="color: #ffc107; margin: 0;">🏆 Top Match</h3>
+            <h2 style="margin: 0.5rem 0;">{top_match:.1f}%</h2>
+        </div>
+        """, unsafe_allow_html=True)
 
 def main():
     st.set_page_config(
-        page_title="AI Assistant & Resume Analyzer",
-        page_icon="🤖",
+        page_title="Resume Analyzer - AI Powered",
+        page_icon="📄",
         layout="wide",
         initial_sidebar_state="collapsed"
     )
     
     # Apply custom styles
-    apply_chat_styles()
+    apply_custom_styles()
     
-    st.title("🤖 AI Assistant & Resume Analyzer")
+    # Header
+    st.markdown("""
+    <div class="main-header">
+        <h1>📄 AI-Powered Resume Analyzer</h1>
+        <p>Analyze multiple resumes against job descriptions with advanced AI technology</p>
+    </div>
+    """, unsafe_allow_html=True)
     
     # Initialize Gemini model
     model = get_gemini_model()
@@ -298,190 +292,77 @@ def main():
         st.error("Failed to initialize Gemini model. Please check your API key and try again.")
         st.stop()
     
-    # Initialize session state
-    if 'chat_history' not in st.session_state:
-        st.session_state.chat_history = []
-    if 'uploaded_image' not in st.session_state:
-        st.session_state.uploaded_image = None
-    if 'image_preview' not in st.session_state:
-        st.session_state.image_preview = None
-    if 'user_input' not in st.session_state:
-        st.session_state.user_input = ""
+    # Job description section
+    st.markdown('<div class="section-header"><h2>🎯 Step 1: Enter Job Description</h2></div>', unsafe_allow_html=True)
     
-    # Create tabs
-    tab1, tab2 = st.tabs(["💬 Chatbot", "📄 Resume Analyzer"])
+    job_description = st.text_area(
+        "Paste the complete job description here:",
+        height=250,
+        placeholder="""Example:
+We are looking for a Senior Software Engineer with:
+- 5+ years of Python development experience
+- Experience with React and JavaScript
+- Knowledge of AWS cloud services
+- Strong problem-solving skills
+- Bachelor's degree in Computer Science
+- Experience with Docker and Kubernetes
+- Excellent communication skills""",
+        help="Include all requirements, skills, qualifications, and experience needed for the role"
+    )
     
-    with tab1:
-        st.header("💬 AI Chatbot")
-        st.write("Chat with AI assistant - Upload images and ask questions!")
-        
-        # Chat history container
-        chat_container = st.container()
-        
-        with chat_container:
-            st.markdown('<div class="chat-container" id="chat-container">', unsafe_allow_html=True)
-            
-            # Display chat history
-            for i, chat_item in enumerate(st.session_state.chat_history):
-                if len(chat_item) == 4:  # With image
-                    user_msg, bot_msg, timestamp, image_b64 = chat_item
-                    display_chat_message("user", user_msg, timestamp, image_b64)
-                else:  # Without image
-                    user_msg, bot_msg, timestamp = chat_item
-                    display_chat_message("user", user_msg, timestamp)
-                
-                display_chat_message("assistant", bot_msg, timestamp)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Spacer to push input to bottom
-        st.markdown("<div style='height: 150px;'></div>", unsafe_allow_html=True)
-        
-        # Fixed input area
-        input_container = st.container()
-        with input_container:
-            st.markdown('<div class="input-container">', unsafe_allow_html=True)
-            
-            # Image upload section
-            col1, col2 = st.columns([3, 1])
-            
-            with col1:
-                uploaded_image = st.file_uploader(
-                    "Upload an image (optional)",
-                    type=['png', 'jpg', 'jpeg', 'gif', 'bmp'],
-                    key="chat_image_uploader",
-                    help="Upload an image to analyze along with your text prompt"
-                )
-            
-            with col2:
-                if uploaded_image:
-                    image = Image.open(uploaded_image)
-                    st.image(image, caption="Uploaded Image", width=100)
-                    st.session_state.uploaded_image = image
-                    st.session_state.image_preview = image_to_base64(image)
-                elif st.session_state.uploaded_image:
-                    st.image(st.session_state.uploaded_image, caption="Current Image", width=100)
-            
-            # Clear image button
-            if st.session_state.uploaded_image:
-                if st.button("🗑️ Remove Image", key="remove_img"):
-                    st.session_state.uploaded_image = None
-                    st.session_state.image_preview = None
-                    st.rerun()
-            
-            # Chat input
-            col1, col2 = st.columns([4, 1])
-            
-            with col1:
-                user_input = st.text_input(
-                    "Message",
-                    key="chat_input",
-                    placeholder="Ask me anything or upload an image for analysis...",
-                    label_visibility="collapsed"
-                )
-            
-            with col2:
-                send_button = st.button("📤 Send", key="send_btn", use_container_width=True)
-            
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Process message
-        if (send_button and user_input.strip()) or (user_input.strip() and user_input != st.session_state.user_input):
-            st.session_state.user_input = user_input
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Generate AI response
-            with st.spinner("🤔 AI is thinking..."):
-                # Include chat history for context
-                context = ""
-                if st.session_state.chat_history:
-                    context = "Previous conversation context:\n"
-                    for chat_item in st.session_state.chat_history[-3:]:  # Last 3 exchanges
-                        if len(chat_item) >= 3:
-                            user_msg, bot_msg = chat_item[0], chat_item[1]
-                            context += f"User: {user_msg}\nAI: {bot_msg}\n\n"
-                
-                full_prompt = f"{context}Current message: {user_input}"
-                
-                # Generate response with or without image
-                ai_response = generate_response(
-                    model, 
-                    full_prompt, 
-                    image=st.session_state.uploaded_image
-                )
-            
-            # Add to chat history
-            if st.session_state.uploaded_image:
-                st.session_state.chat_history.append((
-                    user_input, 
-                    ai_response, 
-                    timestamp, 
-                    st.session_state.image_preview
-                ))
-                # Clear the uploaded image after sending
-                st.session_state.uploaded_image = None
-                st.session_state.image_preview = None
-            else:
-                st.session_state.chat_history.append((user_input, ai_response, timestamp))
-            
-            # Clear input
-            st.session_state.user_input = ""
-            st.rerun()
-        
-        # Clear chat button (at the top)
-        if st.button("🗑️ Clear Chat History", key="clear_chat"):
-            st.session_state.chat_history = []
-            st.session_state.uploaded_image = None
-            st.session_state.image_preview = None
-            st.session_state.user_input = ""
-            st.rerun()
+    # File upload section
+    st.markdown('<div class="section-header"><h2>📁 Step 2: Upload Resume Files</h2></div>', unsafe_allow_html=True)
     
-    with tab2:
-        st.header("📄 Resume Analyzer")
-        st.write("Analyze multiple resumes against a job description")
-        
-        # Job description input
-        st.subheader("1. Enter Job Description")
-        job_description = st.text_area(
-            "Paste the job description here:",
-            height=200,
-            placeholder="Enter the complete job description including required skills, qualifications, and experience..."
-        )
-        
-        # File upload
-        st.subheader("2. Upload Resume Files")
-        uploaded_files = st.file_uploader(
-            "Upload PDF resumes (multiple files allowed)",
-            type=['pdf'],
-            accept_multiple_files=True,
-            key="resume_uploader"
-        )
-        
-        if st.button("🔍 Analyze Resumes", type="primary"):
-            if not job_description.strip():
-                st.error("Please enter a job description first!")
-            elif not uploaded_files:
-                st.error("Please upload at least one resume!")
-            else:
-                with st.spinner("Analyzing resumes... This may take a few minutes."):
+    uploaded_files = st.file_uploader(
+        "Upload PDF resumes (multiple files supported)",
+        type=['pdf'],
+        accept_multiple_files=True,
+        help="Select multiple PDF files to analyze them all at once"
+    )
+    
+    # Display uploaded files info
+    if uploaded_files:
+        st.success(f"✅ {len(uploaded_files)} resume(s) uploaded successfully!")
+        with st.expander("📋 View uploaded files"):
+            for i, file in enumerate(uploaded_files, 1):
+                st.write(f"{i}. {file.name} ({file.size} bytes)")
+    
+    # Analysis section
+    st.markdown('<div class="section-header"><h2>🔍 Step 3: Start Analysis</h2></div>', unsafe_allow_html=True)
+    
+    if st.button("🚀 Analyze Resumes", type="primary"):
+        if not job_description.strip():
+            st.error("❌ Please enter a job description first!")
+        elif not uploaded_files:
+            st.error("❌ Please upload at least one resume!")
+        else:
+            # Create analysis container
+            analysis_container = st.container()
+            
+            with analysis_container:
+                with st.spinner("🔄 Starting analysis... This may take a few minutes."):
                     try:
-                        # Extract skills from job description
-                        st.info("Extracting skills from job description...")
+                        # Step 1: Extract skills from job description
+                        st.info("🎯 Extracting required skills from job description...")
                         required_skills = extract_skills_from_job_description(model, job_description)
                         
                         if required_skills:
-                            st.success(f"Found {len(required_skills)} required skills:")
-                            st.write(", ".join(required_skills))
+                            st.success(f"✅ Found {len(required_skills)} required skills")
+                            with st.expander("📋 View extracted skills"):
+                                skills_text = ", ".join(required_skills)
+                                st.write(skills_text)
                         else:
-                            st.warning("Could not extract skills from job description. Using default analysis.")
-                            required_skills = ["Communication", "Problem Solving", "Technical Skills"]
+                            st.warning("⚠️ Could not extract skills from job description. Using default analysis.")
+                            required_skills = ["Communication", "Problem Solving", "Technical Skills", "Experience"]
                         
-                        # Analyze each resume
+                        # Step 2: Analyze each resume
+                        st.info("📄 Analyzing resumes...")
                         results = []
                         progress_bar = st.progress(0)
+                        status_text = st.empty()
                         
                         for i, uploaded_file in enumerate(uploaded_files):
-                            st.info(f"Analyzing resume {i+1}/{len(uploaded_files)}: {uploaded_file.name}")
+                            status_text.text(f"Analyzing resume {i+1}/{len(uploaded_files)}: {uploaded_file.name}")
                             
                             # Reset file pointer
                             uploaded_file.seek(0)
@@ -495,20 +376,29 @@ def main():
                                 analysis['file_name'] = uploaded_file.name
                                 results.append(analysis)
                             else:
-                                st.warning(f"Could not extract text from {uploaded_file.name}")
+                                st.warning(f"⚠️ Could not extract text from {uploaded_file.name}")
                             
                             progress_bar.progress((i + 1) / len(uploaded_files))
+                        
+                        status_text.empty()
                         
                         if results:
                             # Sort by overall match percentage
                             results.sort(key=lambda x: float(str(x.get('overall_match_percentage', 0)).replace('%', '')), reverse=True)
                             
-                            st.success("Analysis completed!")
+                            st.success("🎉 Analysis completed successfully!")
                             
-                            # Display results
-                            st.subheader("📊 Analysis Results")
+                            # Display metrics
+                            st.markdown("---")
+                            st.markdown("## 📊 Analysis Overview")
+                            display_metrics(results)
                             
-                            # Create summary table
+                            # Results section
+                            st.markdown("---")
+                            st.markdown("## 📋 Detailed Results")
+                            
+                            # Summary table
+                            st.subheader("📈 Candidate Summary")
                             summary_data = []
                             for result in results:
                                 row = {
@@ -516,82 +406,128 @@ def main():
                                     'Candidate Name': result.get('candidate_name', 'Unknown'),
                                     'File Name': result.get('file_name', ''),
                                     'Experience (Years)': result.get('experience_years', '0'),
-                                    'Overall Match (%)': result.get('overall_match_percentage', '0'),
+                                    'Overall Match (%)': f"{result.get('overall_match_percentage', '0')}%",
                                     'Summary': result.get('summary', '')
                                 }
                                 summary_data.append(row)
                             
                             summary_df = pd.DataFrame(summary_data)
-                            st.dataframe(summary_df, use_container_width=True)
+                            st.dataframe(summary_df, use_container_width=True, hide_index=True)
                             
                             # Skills matrix
-                            st.subheader("🎯 Skills Matrix")
-                            
+                            st.subheader("🎯 Skills Matching Matrix")
                             skills_data = []
                             for result in results:
                                 row = {
                                     'Candidate': result.get('candidate_name', 'Unknown'),
-                                    'Experience': result.get('experience_years', '0'),
-                                    'Match %': result.get('overall_match_percentage', '0')
+                                    'Experience': f"{result.get('experience_years', '0')} years",
+                                    'Match %': f"{result.get('overall_match_percentage', '0')}%"
                                 }
                                 
                                 # Add skills columns
                                 skills_match = result.get('skills_match', {})
                                 for skill in required_skills:
-                                    row[skill] = "✅" if skills_match.get(skill, False) else "❌"
+                                    row[skill] = "✅ Yes" if skills_match.get(skill, False) else "❌ No"
                                 
                                 skills_data.append(row)
                             
                             skills_df = pd.DataFrame(skills_data)
-                            st.dataframe(skills_df, use_container_width=True)
+                            st.dataframe(skills_df, use_container_width=True, hide_index=True)
                             
-                            # Top candidates
+                            # Top candidates detailed view
                             st.subheader("🏆 Top Matching Candidates")
                             
-                            for i, result in enumerate(results[:3]):  # Top 3 candidates
-                                with st.expander(f"#{i+1} - {result.get('candidate_name', 'Unknown')} ({result.get('overall_match_percentage', '0')}% match)"):
+                            for i, result in enumerate(results[:5]):  # Top 5 candidates
+                                match_percentage = float(str(result.get('overall_match_percentage', 0)).replace('%', ''))
+                                
+                                # Color coding based on match percentage
+                                if match_percentage >= 80:
+                                    color = "🟢"
+                                elif match_percentage >= 60:
+                                    color = "🟡"
+                                else:
+                                    color = "🔴"
+                                
+                                with st.expander(f"{color} #{i+1} - {result.get('candidate_name', 'Unknown')} ({result.get('overall_match_percentage', '0')}% match)"):
                                     col1, col2 = st.columns(2)
                                     
                                     with col1:
+                                        st.markdown("**📄 Basic Information**")
                                         st.write(f"**File:** {result.get('file_name', '')}")
                                         st.write(f"**Experience:** {result.get('experience_years', '0')} years")
                                         st.write(f"**Match Percentage:** {result.get('overall_match_percentage', '0')}%")
                                     
                                     with col2:
-                                        st.write("**Skills Match:**")
+                                        st.markdown("**🎯 Skills Analysis**")
                                         skills_match = result.get('skills_match', {})
                                         matched_skills = [skill for skill, match in skills_match.items() if match]
                                         missing_skills = [skill for skill, match in skills_match.items() if not match]
                                         
                                         if matched_skills:
-                                            st.success(f"✅ Has: {', '.join(matched_skills)}")
+                                            st.success(f"✅ **Matching Skills:** {', '.join(matched_skills)}")
                                         if missing_skills:
-                                            st.error(f"❌ Missing: {', '.join(missing_skills)}")
+                                            st.error(f"❌ **Missing Skills:** {', '.join(missing_skills)}")
                                     
-                                    st.write(f"**Summary:** {result.get('summary', '')}")
+                                    st.markdown("**📝 Summary**")
+                                    st.info(result.get('summary', 'No summary available'))
                             
-                            # Download results
-                            st.subheader("📥 Download Results")
+                            # Download section
+                            st.markdown("---")
+                            st.subheader("📥 Download Analysis Report")
                             
-                            # Create Excel file
-                            output = BytesIO()
-                            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                                summary_df.to_excel(writer, sheet_name='Summary', index=False)
-                                skills_df.to_excel(writer, sheet_name='Skills Matrix', index=False)
+                            col1, col2 = st.columns(2)
                             
-                            st.download_button(
-                                label="📊 Download Analysis Report (Excel)",
-                                data=output.getvalue(),
-                                file_name=f"resume_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                            )
+                            with col1:
+                                # Create Excel file
+                                output = BytesIO()
+                                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                                    summary_df.to_excel(writer, sheet_name='Summary', index=False)
+                                    skills_df.to_excel(writer, sheet_name='Skills Matrix', index=False)
+                                    
+                                    # Add job description sheet
+                                    job_desc_df = pd.DataFrame({
+                                        'Job Description': [job_description],
+                                        'Required Skills': [', '.join(required_skills)],
+                                        'Analysis Date': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')]
+                                    })
+                                    job_desc_df.to_excel(writer, sheet_name='Job Description', index=False)
+                                
+                                st.download_button(
+                                    label="📊 Download Excel Report",
+                                    data=output.getvalue(),
+                                    file_name=f"resume_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                    use_container_width=True
+                                )
+                            
+                            with col2:
+                                # Create CSV file
+                                csv_output = BytesIO()
+                                summary_df.to_csv(csv_output, index=False)
+                                
+                                st.download_button(
+                                    label="📄 Download CSV Report",
+                                    data=csv_output.getvalue(),
+                                    file_name=f"resume_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                    mime="text/csv",
+                                    use_container_width=True
+                                )
                         
                         else:
-                            st.error("No resumes could be analyzed. Please check your PDF files.")
+                            st.error("❌ No resumes could be analyzed. Please check your PDF files and try again.")
                     
                     except Exception as e:
-                        st.error(f"An error occurred during analysis: {str(e)}")
-                        st.info("Please try again or check your API key and internet connection.")
+                        st.error(f"❌ An error occurred during analysis: {str(e)}")
+                        st.info("💡 Please try again or check your API key and internet connection.")
+    
+    # Footer
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align: center; color: #666; padding: 2rem;">
+        <p>🤖 Powered by Google Gemini AI | Built with Streamlit</p>
+        <p>📧 For support or feedback, please contact your administrator</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
